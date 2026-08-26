@@ -6,7 +6,8 @@ const os = require('os');
 const { execFile } = require('child_process');
 const util = require('util');
 
-const execFileAsync = util.promisify(execFile);
+const execFileAsyncRaw = util.promisify(execFile);
+const execFileAsync = (cmd, args) => execFileAsyncRaw(cmd, args, { maxBuffer: 64 * 1024 * 1024 });
 
 const app = express();
 app.use(express.json({ limit: '100mb' }));
@@ -105,7 +106,14 @@ app.post('/assemble', async (req, res) => {
     res.send(videoBuffer);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: String((err && err.message) || err) });
+    res.status(500).json({
+      error: String((err && err.message) || err),
+      code: err && err.code,
+      signal: err && err.signal,
+      killed: err && err.killed,
+      stderrTail: err && err.stderr ? String(err.stderr).slice(-4000) : null,
+      stdoutTail: err && err.stdout ? String(err.stdout).slice(-2000) : null,
+    });
   } finally {
     fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
