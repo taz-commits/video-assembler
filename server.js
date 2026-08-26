@@ -77,12 +77,14 @@ app.post('/assemble', async (req, res) => {
 
       await execFileAsync('ffmpeg', [
         '-y',
+        '-threads', '2',
         '-loop', '1', '-i', imagePath,
         '-i', audioPath,
         '-filter_complex', zoompan,
         '-map', '[v]', '-map', '1:a',
         '-t', String(duration),
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+        '-x264-params', 'threads=2:lookahead_threads=1:rc-lookahead=10',
         '-c:a', 'aac', '-b:a', '192k',
         clipPath,
       ]);
