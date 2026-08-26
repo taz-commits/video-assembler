@@ -16,6 +16,20 @@ const API_KEY = process.env.API_KEY;
 const FPS = 30;
 const WIDTH = 1080;
 const HEIGHT = 1920;
+const MUSIC_DIR = path.join(__dirname, 'music');
+const DEFAULT_MUSIC_VOLUME = 0.15;
+
+async function pickRandomMusicTrack() {
+  let files;
+  try {
+    files = (await fs.readdir(MUSIC_DIR)).filter((f) => f.toLowerCase().endsWith('.mp3'));
+  } catch {
+    return null;
+  }
+  if (!files.length) return null;
+  const chosen = files[Math.floor(Math.random() * files.length)];
+  return path.join(MUSIC_DIR, chosen);
+}
 
 function mimeToExt(mime) {
   if (!mime) return null;
@@ -103,7 +117,40 @@ app.post('/assemble', async (req, res) => {
       '-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', finalPath,
     ]);
 
-    const videoBuffer = await fs.readFile(finalPath);
+    const wantsMusic = req.body.music !== false;
+    const musicVolume = typeof req.body.music_volume === 'number' ? req.body.music_volume : DEFAULT_MUSIC_VOLUME;
+    const musicTrack = wantsMusic ? await pickRandomMusicTrack() : null;
+
+    let outputPath = finalPath;
+
+    if (musicTrack) {
+      const { stdout: durationOut } = await execFileAsync('ffprobe', [
+        '-v', 'quiet',
+        '-show_entries', 'format=duration',
+        '-of', 'csv=p=0',
+        finalPath,
+      ]);
+      const totalDuration = Math.max(parseFloat(durationOut.trim()) || 1, 1);
+
+      const withMusicPath = path.join(workDir, 'final_with_music.mp4');
+      const amixFilter = `[1:a]volume=${musicVolume}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]`;
+
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-i', finalPath,
+        '-stream_loop', '-1', '-i', musicTrack,
+        '-filter_complex', amixFilter,
+        '-map', '0:v', '-map', '[aout]',
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-t', String(totalDuration),
+        withMusicPath,
+      ]);
+
+      outputPath = withMusicPath;
+    }
+
+    const videoBuffer = await fs.readFile(outputPath);
     res.setHeader('Content-Type', 'video/mp4');
     res.send(videoBuffer);
   } catch (err) {

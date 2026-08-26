@@ -10,6 +10,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY server.js ./
+COPY music ./music
 
 ENV PORT=8080
 EXPOSE 8080
