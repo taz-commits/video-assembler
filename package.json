@@ -1,0 +1,13 @@
+{
+  "name": "video-assembler",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted FFmpeg service: images + audio + timing -> Ken Burns MP4 assembly",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
