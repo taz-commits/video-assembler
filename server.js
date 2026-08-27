@@ -18,6 +18,21 @@ const WIDTH = 1080;
 const HEIGHT = 1920;
 const MUSIC_DIR = path.join(__dirname, 'music');
 const DEFAULT_MUSIC_VOLUME = 0.15;
+const FADE_OUT_DURATION = 1.5;
+
+function parseTimingDurationSeconds(timing) {
+  if (typeof timing !== 'string') return null;
+  const matches = timing.match(/(\d{1,2}):(\d{2})/g);
+  if (!matches || matches.length < 2) return null;
+  const toSeconds = (t) => {
+    const [m, s] = t.split(':').map(Number);
+    return m * 60 + s;
+  };
+  const start = toSeconds(matches[0]);
+  const end = toSeconds(matches[1]);
+  const diff = end - start;
+  return diff > 0 ? diff : null;
+}
 
 async function pickRandomMusicTrack() {
   let files;
@@ -83,19 +98,21 @@ app.post('/assemble', async (req, res) => {
         '-of', 'csv=p=0',
         audioPath,
       ]);
-      const duration = Math.max(parseFloat(stdout.trim()) || 3, 1);
+      const audioDuration = Math.max(parseFloat(stdout.trim()) || 3, 1);
+      const targetDuration = parseTimingDurationSeconds(part.timing);
+      const duration = targetDuration ? Math.max(audioDuration, targetDuration) : audioDuration;
       const totalFrames = Math.max(Math.round(duration * FPS), 1);
 
       const clipPath = path.join(workDir, `clip_${i}.mp4`);
-      const zoompan = `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},zoompan=z='min(zoom+0.0008,1.3)':d=${totalFrames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}[v]`;
+      const filterComplex = `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},zoompan=z='min(zoom+0.0008,1.3)':d=${totalFrames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}[v];[1:a]apad=whole_dur=${duration}[a]`;
 
       await execFileAsync('ffmpeg', [
         '-y',
         '-threads', '2',
         '-loop', '1', '-i', imagePath,
         '-i', audioPath,
-        '-filter_complex', zoompan,
-        '-map', '[v]', '-map', '1:a',
+        '-filter_complex', filterComplex,
+        '-map', '[v]', '-map', '[a]',
         '-t', String(duration),
         '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
         '-x264-params', 'threads=2:lookahead_threads=1:rc-lookahead=10',
@@ -121,34 +138,37 @@ app.post('/assemble', async (req, res) => {
     const musicVolume = typeof req.body.music_volume === 'number' ? req.body.music_volume : DEFAULT_MUSIC_VOLUME;
     const musicTrack = wantsMusic ? await pickRandomMusicTrack() : null;
 
-    let outputPath = finalPath;
+    const { stdout: durationOut } = await execFileAsync('ffprobe', [
+      '-v', 'quiet',
+      '-show_entries', 'format=duration',
+      '-of', 'csv=p=0',
+      finalPath,
+    ]);
+    const totalDuration = Math.max(parseFloat(durationOut.trim()) || 1, 1);
+    const fadeDuration = Math.min(FADE_OUT_DURATION, totalDuration);
+    const fadeStart = Math.max(totalDuration - fadeDuration, 0);
+
+    const outputPath = path.join(workDir, 'final_output.mp4');
+    const ffmpegArgs = ['-y', '-i', finalPath];
+    let filterComplex;
 
     if (musicTrack) {
-      const { stdout: durationOut } = await execFileAsync('ffprobe', [
-        '-v', 'quiet',
-        '-show_entries', 'format=duration',
-        '-of', 'csv=p=0',
-        finalPath,
-      ]);
-      const totalDuration = Math.max(parseFloat(durationOut.trim()) || 1, 1);
-
-      const withMusicPath = path.join(workDir, 'final_with_music.mp4');
-      const amixFilter = `[1:a]volume=${musicVolume}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]`;
-
-      await execFileAsync('ffmpeg', [
-        '-y',
-        '-i', finalPath,
-        '-stream_loop', '-1', '-i', musicTrack,
-        '-filter_complex', amixFilter,
-        '-map', '0:v', '-map', '[aout]',
-        '-c:v', 'copy',
-        '-c:a', 'aac', '-b:a', '192k',
-        '-t', String(totalDuration),
-        withMusicPath,
-      ]);
-
-      outputPath = withMusicPath;
+      ffmpegArgs.push('-stream_loop', '-1', '-i', musicTrack);
+      filterComplex = `[1:a]volume=${musicVolume}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[amixed];[amixed]afade=t=out:st=${fadeStart}:d=${fadeDuration}[aout];[0:v]fade=t=out:st=${fadeStart}:d=${fadeDuration}[vout]`;
+    } else {
+      filterComplex = `[0:a]afade=t=out:st=${fadeStart}:d=${fadeDuration}[aout];[0:v]fade=t=out:st=${fadeStart}:d=${fadeDuration}[vout]`;
     }
+
+    ffmpegArgs.push(
+      '-filter_complex', filterComplex,
+      '-map', '[vout]', '-map', '[aout]',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-t', String(totalDuration),
+      outputPath,
+    );
+
+    await execFileAsync('ffmpeg', ffmpegArgs);
 
     const videoBuffer = await fs.readFile(outputPath);
     res.setHeader('Content-Type', 'video/mp4');
