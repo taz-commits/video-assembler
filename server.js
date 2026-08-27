@@ -162,7 +162,9 @@ app.post('/assemble', async (req, res) => {
     ffmpegArgs.push(
       '-filter_complex', filterComplex,
       '-map', '[vout]', '-map', '[aout]',
+      '-threads', '2',
       '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+      '-x264-params', 'threads=2:lookahead_threads=1:rc-lookahead=10',
       '-c:a', 'aac', '-b:a', '192k',
       '-t', String(totalDuration),
       outputPath,
